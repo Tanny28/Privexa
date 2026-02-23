@@ -1,0 +1,27 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Data files (don't commit uploads or vector indexes)
+data/uploads/*
+data/vectorstore/*
+data/*.db
+!data/uploads/.gitkeep
+!data/vectorstore/.gitkeep
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
