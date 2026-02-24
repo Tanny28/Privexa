@@ -22,6 +22,9 @@ data/*.db
 .vscode/
 .idea/
 
+# Test UI (local only)
+test_ui.py
+
 # OS
 Thumbs.db
 .DS_Store

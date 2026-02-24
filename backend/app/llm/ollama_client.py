@@ -1,5 +1,6 @@
 # ──────────────────────────────────────────────
 # Ollama LLM Client (Local Inference)
+# Uses OpenAI-compatible /v1/chat/completions API
 # ──────────────────────────────────────────────
 import httpx
 from typing import Optional
@@ -11,7 +12,7 @@ class OllamaClient:
     Client for communicating with a local Ollama server.
 
     Ollama runs Llama 3 (or other models) locally and exposes
-    an HTTP API at http://localhost:11434.
+    an OpenAI-compatible API at http://localhost:11434/v1/
     """
 
     def __init__(
@@ -31,7 +32,8 @@ class OllamaClient:
         max_tokens: int = 1024,
     ) -> str:
         """
-        Generate a response from the local LLM.
+        Generate a response from the local LLM using the
+        OpenAI-compatible chat completions endpoint.
 
         Args:
             prompt: The full prompt (system + context + question).
@@ -43,22 +45,25 @@ class OllamaClient:
         """
         payload = {
             "model": self.model,
-            "prompt": prompt,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
             "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                f"{self.base_url}/api/generate",
+                f"{self.base_url}/v1/chat/completions",
                 json=payload,
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("response", "").strip()
+            choices = data.get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "").strip()
+            return ""
 
     async def is_available(self) -> bool:
         """Check if Ollama server is running and the model is loaded."""
@@ -68,7 +73,6 @@ class OllamaClient:
                 if response.status_code == 200:
                     models = response.json().get("models", [])
                     model_names = [m.get("name", "") for m in models]
-                    # Check if our model is available (with or without :latest tag)
                     return any(
                         self.model in name for name in model_names
                     )
