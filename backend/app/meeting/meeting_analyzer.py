@@ -1,9 +1,18 @@
 # ──────────────────────────────────────────────
 # Meeting Analyzer — LLM-powered transcript analysis
+# Uses mistral model with optimized settings from notebook
 # ──────────────────────────────────────────────
 import re
+import json
 from typing import Dict, List
 from app.llm.ollama_client import get_ollama_client
+from app.config import (
+    OLLAMA_MEETING_MODEL,
+    MEETING_LLM_NUM_PREDICT,
+    MEETING_LLM_TEMPERATURE,
+    MEETING_LLM_TOP_K,
+    MEETING_TRANSCRIPT_MAX_CHARS,
+)
 from app.meeting.prompts import (
     SUMMARY_PROMPT,
     KEY_POINTS_PROMPT,
@@ -67,10 +76,29 @@ def _parse_action_items(text: str) -> List[Dict]:
     return items
 
 
+def _try_parse_json(text: str) -> Dict | None:
+    """
+    Robust JSON extraction from LLM output.
+    Ported from teammate's parse_json() function.
+    """
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(text[start:end])
+    except Exception:
+        pass
+    return None
+
+
 def _parse_full_analysis(text: str) -> Dict:
     """
     Parse the structured full analysis response from LLM.
-    Splits by ## section headers.
+    Tries JSON first (mistral often returns JSON), falls back to ## section parsing.
     """
     result = {
         "summary": "",
@@ -80,6 +108,30 @@ def _parse_full_analysis(text: str) -> Dict:
         "follow_up": [],
     }
 
+    # Try JSON parsing first (teammate's approach for mistral)
+    json_result = _try_parse_json(text)
+    if json_result:
+        result["summary"] = json_result.get("summary", "")
+        result["key_points"] = json_result.get("key_points", json_result.get("key_discussion_points", []))
+        result["decisions"] = json_result.get("decisions", [])
+        result["follow_up"] = json_result.get("follow_up", json_result.get("follow_ups", []))
+
+        # Normalize action items / tasks
+        raw_tasks = json_result.get("action_items", json_result.get("tasks", []))
+        for item in raw_tasks:
+            if isinstance(item, dict):
+                result["action_items"].append({
+                    "person": item.get("person", item.get("assigned_to", "Unassigned")),
+                    "task": item.get("task", ""),
+                    "deadline": item.get("deadline", "No deadline") or "No deadline",
+                })
+            elif isinstance(item, str):
+                result["action_items"].append({
+                    "person": "Unassigned", "task": item, "deadline": "No deadline",
+                })
+        return result
+
+    # Fallback: parse ## section headers
     sections = re.split(r"##\s*", text)
 
     for section in sections:
@@ -107,8 +159,8 @@ def _parse_full_analysis(text: str) -> Dict:
 
 async def analyze_transcript_full(transcript: str) -> Dict:
     """
-    Full meeting analysis in a single LLM call.
-    More efficient but may be less accurate for very long transcripts.
+    Full meeting analysis in a single LLM call using mistral.
+    Uses teammate's efficiency settings: capped tokens, low temp, restricted top_k.
 
     Args:
         transcript: The meeting transcript text.
@@ -118,16 +170,21 @@ async def analyze_transcript_full(transcript: str) -> Dict:
     """
     llm = get_ollama_client()
 
-    # For long transcripts, use only a portion that fits context
-    chunks = chunk_transcript(transcript, max_chars=4000)
+    # Smart truncation: use configurable limit, split at sentence boundaries
+    chunks = chunk_transcript(transcript, max_chars=MEETING_TRANSCRIPT_MAX_CHARS)
     text_to_analyze = chunks[0]
 
     if len(chunks) > 1:
-        # If multiple chunks, add a note
         text_to_analyze += f"\n\n[Note: This is part 1 of {len(chunks)} parts of the transcript]"
 
     prompt = FULL_ANALYSIS_PROMPT.format(transcript=text_to_analyze)
-    response = await llm.generate(prompt, temperature=0.1, max_tokens=2048)
+    response = await llm.generate(
+        prompt,
+        temperature=MEETING_LLM_TEMPERATURE,
+        max_tokens=MEETING_LLM_NUM_PREDICT,
+        model=OLLAMA_MEETING_MODEL,
+        top_k=MEETING_LLM_TOP_K,
+    )
 
     result = _parse_full_analysis(response)
 
@@ -141,7 +198,7 @@ async def analyze_transcript_full(transcript: str) -> Dict:
 async def analyze_transcript_detailed(transcript: str) -> Dict:
     """
     Detailed meeting analysis using separate LLM calls per section.
-    More accurate but slower. Use for important meetings.
+    More accurate but slower. Uses mistral model.
 
     Args:
         transcript: The meeting transcript text.
@@ -151,24 +208,31 @@ async def analyze_transcript_detailed(transcript: str) -> Dict:
     """
     llm = get_ollama_client()
 
-    chunks = chunk_transcript(transcript, max_chars=4000)
+    chunks = chunk_transcript(transcript, max_chars=MEETING_TRANSCRIPT_MAX_CHARS)
     text = chunks[0]
 
-    # Run each analysis pass
+    common_kwargs = {
+        "temperature": MEETING_LLM_TEMPERATURE,
+        "max_tokens": MEETING_LLM_NUM_PREDICT,
+        "model": OLLAMA_MEETING_MODEL,
+        "top_k": MEETING_LLM_TOP_K,
+    }
+
+    # Run each analysis pass with mistral
     summary_raw = await llm.generate(
-        SUMMARY_PROMPT.format(transcript=text), temperature=0.1, max_tokens=512
+        SUMMARY_PROMPT.format(transcript=text), **common_kwargs
     )
     key_points_raw = await llm.generate(
-        KEY_POINTS_PROMPT.format(transcript=text), temperature=0.1, max_tokens=512
+        KEY_POINTS_PROMPT.format(transcript=text), **common_kwargs
     )
     actions_raw = await llm.generate(
-        ACTION_ITEMS_PROMPT.format(transcript=text), temperature=0.1, max_tokens=512
+        ACTION_ITEMS_PROMPT.format(transcript=text), **common_kwargs
     )
     decisions_raw = await llm.generate(
-        DECISIONS_PROMPT.format(transcript=text), temperature=0.1, max_tokens=512
+        DECISIONS_PROMPT.format(transcript=text), **common_kwargs
     )
     followup_raw = await llm.generate(
-        FOLLOWUP_PROMPT.format(transcript=text), temperature=0.1, max_tokens=512
+        FOLLOWUP_PROMPT.format(transcript=text), **common_kwargs
     )
 
     return {

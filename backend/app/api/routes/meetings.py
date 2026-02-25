@@ -1,10 +1,13 @@
 # ──────────────────────────────────────────────
-# Meeting Routes — Analyze transcripts, generate reports
+# Meeting Routes — Audio/transcript upload, analysis, PDF reports
+# Supports: audio files (→ whisper → analysis) or .txt transcripts (→ analysis)
 # ──────────────────────────────────────────────
 import os
 import uuid
 import json
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+import logging
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -21,20 +24,19 @@ from app.meeting.transcript_processor import clean_transcript, estimate_duration
 from app.meeting.meeting_analyzer import analyze_transcript_full, analyze_transcript_detailed
 from app.meeting.report_generator import generate_meeting_report
 from app.models.user import User
-from app.config import UPLOAD_DIR
+from app.config import UPLOAD_DIR, ALLOWED_AUDIO_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
 
 TRANSCRIPTS_DIR = UPLOAD_DIR / "transcripts"
+AUDIO_DIR = UPLOAD_DIR / "audio"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ─── Schemas ─────────────────────────────────
-
-class MeetingAnalysisRequest(BaseModel):
-    title: str = "Untitled Meeting"
-    mode: str = "fast"  # "fast" or "detailed"
-
 
 class ActionItemSchema(BaseModel):
     person: str
@@ -52,6 +54,8 @@ class MeetingAnalysisResponse(BaseModel):
     follow_up: List[str]
     estimated_duration: Optional[str]
     report_path: Optional[str]
+    source_type: str = "transcript"      # "transcript" or "audio"
+    transcription_metadata: Optional[dict] = None
 
 
 class MeetingListItem(BaseModel):
@@ -63,61 +67,100 @@ class MeetingListItem(BaseModel):
     created_at: Optional[str]
 
 
+def _get_file_extension(filename: str) -> str:
+    """Get lowercase file extension."""
+    return Path(filename).suffix.lower()
+
+
+def _is_audio_file(filename: str) -> bool:
+    """Check if a file is a supported audio format."""
+    return _get_file_extension(filename) in ALLOWED_AUDIO_EXTENSIONS
+
+
+def _is_transcript_file(filename: str) -> bool:
+    """Check if a file is a text transcript."""
+    return _get_file_extension(filename) == ".txt"
+
+
 # ─── Endpoints ───────────────────────────────
 
 @router.post("/analyze", response_model=MeetingAnalysisResponse)
 async def analyze_meeting(
     file: UploadFile = File(...),
-    title: str = "Untitled Meeting",
-    mode: str = "fast",
+    title: str = Form("Untitled Meeting"),
+    mode: str = Form("fast"),
     current_user: User = Depends(require_permission("upload_documents")),
     db: Session = Depends(get_db),
 ):
     """
-    Upload a transcript file and get full meeting analysis + PDF report.
+    Upload an audio file or transcript and get full meeting analysis + PDF report.
 
-    - **file**: Text file (.txt) containing the meeting transcript
+    - **file**: Audio file (.mp3, .wav, .m4a, .ogg, .flac, .webm) OR text file (.txt)
     - **title**: Meeting title for the report
-    - **mode**: "fast" (single LLM call) or "detailed" (multiple LLM passes, slower but more accurate)
+    - **mode**: "fast" (single LLM call) or "detailed" (multiple LLM passes)
+
+    Audio files are transcribed with faster-whisper (offline), then analyzed.
+    Text files are analyzed directly.
     """
-    # Validate file
-    if not file.filename.endswith(".txt"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .txt transcript files are supported.",
+    filename = file.filename or "unknown"
+    meeting_id = str(uuid.uuid4())
+
+    source_type = "transcript"
+    transcription_metadata = None
+
+    # ─── Route based on file type ────────────
+    if _is_audio_file(filename):
+        # AUDIO PATH: save → transcribe → analyze
+        source_type = "audio"
+        transcript_text, transcription_metadata = await _handle_audio_upload(
+            file, meeting_id, filename
         )
 
-    # Read transcript
-    contents = await file.read()
-    try:
-        transcript_text = contents.decode("utf-8")
-    except UnicodeDecodeError:
-        transcript_text = contents.decode("latin-1")
+    elif _is_transcript_file(filename):
+        # TRANSCRIPT PATH: read → clean → analyze
+        transcript_text = await _handle_transcript_upload(file)
 
-    transcript_text = clean_transcript(transcript_text)
+    else:
+        ext = _get_file_extension(filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported file type: '{ext}'. "
+                f"Supported: .txt (transcript), .mp3, .wav, .m4a, .ogg, .flac, .webm (audio)"
+            ),
+        )
 
+    # Validate transcript length
     if len(transcript_text.strip()) < 50:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Transcript is too short. Minimum 50 characters.",
+            detail="Transcript is too short. Minimum 50 characters after cleaning.",
         )
 
     # Save transcript to disk
-    meeting_id = str(uuid.uuid4())
     transcript_path = str(TRANSCRIPTS_DIR / f"{meeting_id}.txt")
     with open(transcript_path, "w", encoding="utf-8") as f:
         f.write(transcript_text)
 
-    # Estimate duration
+    # Estimate duration from text (audio metadata may also have real duration)
     duration = estimate_duration(transcript_text)
+    if transcription_metadata and transcription_metadata.get("audio_duration_sec"):
+        audio_secs = transcription_metadata["audio_duration_sec"]
+        if audio_secs >= 60:
+            mins = int(audio_secs // 60)
+            secs = int(audio_secs % 60)
+            duration = f"{mins}m {secs}s"
+        else:
+            duration = f"{int(audio_secs)}s"
 
-    # Analyze with LLM
+    # Analyze with LLM (mistral)
     try:
         if mode == "detailed":
             analysis = await analyze_transcript_detailed(transcript_text)
         else:
             analysis = await analyze_transcript_full(transcript_text)
     except Exception as e:
+        logger.error(f"Analysis failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Analysis failed: {str(e)}",
@@ -130,19 +173,18 @@ async def analyze_meeting(
             meeting_id=meeting_id,
             title=title,
             duration=duration,
-            filename=file.filename,
+            filename=filename,
         )
     except Exception as e:
-        import logging
-        logging.error(f"PDF generation failed: {e}")
-        report_path = None  # Non-fatal: analysis still succeeds
+        logger.error(f"PDF generation failed: {e}")
+        report_path = None
 
     # Save to database
     create_meeting_record(
         db=db,
         meeting_id=meeting_id,
         title=title,
-        transcript_filename=file.filename,
+        transcript_filename=filename,
         transcript_path=transcript_path,
         report_path=report_path or "",
         summary=analysis.get("summary", ""),
@@ -171,7 +213,56 @@ async def analyze_meeting(
         follow_up=analysis.get("follow_up", []),
         estimated_duration=duration,
         report_path=report_path,
+        source_type=source_type,
+        transcription_metadata=transcription_metadata,
     )
+
+
+async def _handle_audio_upload(
+    file: UploadFile, meeting_id: str, filename: str
+) -> tuple:
+    """
+    Save audio file, transcribe with Whisper.
+    Returns (transcript_text, metadata_dict).
+    """
+    from app.meeting.transcriber import transcribe_audio
+
+    ext = _get_file_extension(filename)
+    audio_path = str(AUDIO_DIR / f"{meeting_id}{ext}")
+
+    # Save audio to disk
+    contents = await file.read()
+    with open(audio_path, "wb") as f:
+        f.write(contents)
+
+    logger.info(f"Audio saved: {audio_path} ({len(contents)} bytes)")
+
+    # Transcribe
+    try:
+        transcript_text, metadata = await transcribe_audio(audio_path)
+    except Exception as e:
+        logger.error(f"Transcription failed: {e}")
+        # Clean up audio file on failure
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Audio transcription failed: {str(e)}",
+        )
+
+    transcript_text = clean_transcript(transcript_text)
+    return transcript_text, metadata
+
+
+async def _handle_transcript_upload(file: UploadFile) -> str:
+    """Read and clean a transcript text file."""
+    contents = await file.read()
+    try:
+        transcript_text = contents.decode("utf-8")
+    except UnicodeDecodeError:
+        transcript_text = contents.decode("latin-1")
+
+    return clean_transcript(transcript_text)
 
 
 @router.get("/", response_model=List[MeetingListItem])

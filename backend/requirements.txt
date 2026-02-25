@@ -20,6 +20,10 @@ faiss-cpu==1.9.0.post1
 # LLM Client
 httpx==0.28.1
 
+# Speech-to-Text (offline)
+faster-whisper==1.1.1
+torch>=2.0.0
+
 # PDF Report Generation
 fpdf2==2.8.6
 
