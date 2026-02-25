@@ -6,6 +6,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from app.models.user import User
 from app.models.document import Document
+from app.models.meeting import Meeting
 from app.core.security import hash_password
 
 
@@ -81,6 +82,58 @@ def delete_document_record(db: Session, document_id: str) -> bool:
     doc = db.query(Document).filter(Document.id == document_id).first()
     if doc:
         db.delete(doc)
+        db.commit()
+        return True
+    return False
+
+
+# ─── Meeting Operations ─────────────────────
+
+def create_meeting_record(
+    db: Session,
+    meeting_id: str,
+    title: str,
+    transcript_filename: str,
+    transcript_path: str,
+    report_path: str,
+    summary: str,
+    analysis_json: str,
+    estimated_duration: str,
+    uploaded_by: str,
+) -> Meeting:
+    """Save a meeting analysis record."""
+    meeting = Meeting(
+        id=meeting_id,
+        title=title,
+        transcript_filename=transcript_filename,
+        transcript_path=transcript_path,
+        report_path=report_path,
+        summary=summary,
+        analysis_json=analysis_json,
+        estimated_duration=estimated_duration,
+        uploaded_by=uploaded_by,
+    )
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+    return meeting
+
+
+def get_meeting_by_id(db: Session, meeting_id: str) -> Optional[Meeting]:
+    """Find a meeting by ID."""
+    return db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+
+def list_meetings(db: Session) -> List[Meeting]:
+    """List all meetings."""
+    return db.query(Meeting).all()
+
+
+def delete_meeting_record(db: Session, meeting_id: str) -> bool:
+    """Delete a meeting record."""
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting:
+        db.delete(meeting)
         db.commit()
         return True
     return False

@@ -20,6 +20,9 @@ faiss-cpu==1.9.0.post1
 # LLM Client
 httpx==0.28.1
 
+# PDF Report Generation
+fpdf2==2.8.6
+
 # Database
 sqlalchemy==2.0.37
 aiosqlite==0.20.0

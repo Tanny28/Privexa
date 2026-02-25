@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import init_db, get_db, SessionLocal
 from app.db.repositories import get_user_by_username, create_user
-from app.api.routes import auth, documents, query
+from app.api.routes import auth, documents, query, meetings
 
 app = FastAPI(
     title="AegisNode",
@@ -26,6 +26,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(query.router, prefix="/api/v1")
+app.include_router(meetings.router, prefix="/api/v1")
 
 
 # ─── Startup Event ──────────────────────────
