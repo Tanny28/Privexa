@@ -2,6 +2,14 @@
 # Meeting-Specific Prompt Templates
 # ──────────────────────────────────────────────
 
+TITLE_PROMPT = """Read this transcript and generate a short, descriptive title (5-10 words max).
+The title should capture the main topic. Return ONLY the title, nothing else.
+
+Transcript:
+{transcript}
+
+Title:"""
+
 SUMMARY_PROMPT = """You are a professional meeting analyst. Read the following meeting transcript and provide a clear, concise summary in 3-5 sentences.
 Focus on the main purpose, key outcomes, and overall tone of the meeting.
 

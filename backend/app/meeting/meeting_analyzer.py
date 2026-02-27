@@ -14,6 +14,7 @@ from app.config import (
     MEETING_TRANSCRIPT_MAX_CHARS,
 )
 from app.meeting.prompts import (
+    TITLE_PROMPT,
     SUMMARY_PROMPT,
     KEY_POINTS_PROMPT,
     ACTION_ITEMS_PROMPT,
@@ -22,6 +23,26 @@ from app.meeting.prompts import (
     FULL_ANALYSIS_PROMPT,
 )
 from app.meeting.transcript_processor import chunk_transcript
+
+
+async def generate_meeting_title(transcript: str) -> str:
+    """
+    Auto-generate a short descriptive title from transcript.
+    Uses first 1500 chars for speed — title only needs the gist.
+    """
+    llm = get_ollama_client()
+    snippet = transcript[:1500]
+    prompt = TITLE_PROMPT.format(transcript=snippet)
+    raw = await llm.generate(
+        prompt,
+        temperature=0.1,
+        max_tokens=30,
+        model=OLLAMA_MEETING_MODEL,
+        top_k=MEETING_LLM_TOP_K,
+    )
+    # Clean: remove quotes, newlines, trailing punctuation
+    title = raw.strip().strip('"\' ').split('\n')[0].strip()
+    return title or "Meeting Summary"
 
 
 def _parse_bullet_list(text: str) -> List[str]:

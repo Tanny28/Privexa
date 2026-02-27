@@ -21,7 +21,7 @@ from app.db.repositories import (
 )
 from app.api.dependencies import require_permission
 from app.meeting.transcript_processor import clean_transcript, estimate_duration
-from app.meeting.meeting_analyzer import analyze_transcript_full, analyze_transcript_detailed
+from app.meeting.meeting_analyzer import analyze_transcript_full, analyze_transcript_detailed, generate_meeting_title
 from app.meeting.report_generator import generate_meeting_report
 from app.models.user import User
 from app.config import UPLOAD_DIR, ALLOWED_AUDIO_EXTENSIONS
@@ -152,6 +152,15 @@ async def analyze_meeting(
             duration = f"{mins}m {secs}s"
         else:
             duration = f"{int(audio_secs)}s"
+
+    # Auto-generate title if user didn't provide one
+    if not title or title in ("Untitled Meeting", ""):
+        try:
+            title = await generate_meeting_title(transcript_text)
+            logger.info(f"Auto-generated title: {title}")
+        except Exception as e:
+            logger.warning(f"Title generation failed, using default: {e}")
+            title = "Meeting Summary"
 
     # Analyze with LLM (mistral)
     try:

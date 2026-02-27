@@ -48,7 +48,7 @@ WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")         # skip auto-detec
 WHISPER_BEAM_SIZE = 1               # greedy decoding — 3x faster
 WHISPER_VAD_FILTER = True           # skip silent parts
 WHISPER_VAD_MIN_SILENCE_MS = 500    # skip pauses > 0.5s
-ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm", ".mpeg", ".wma"}
 
 # ─── RAG Retrieval ───────────────────────────
 TOP_K_RESULTS = 5         # number of chunks to retrieve
@@ -60,5 +60,4 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 # ─── Allowed file types ─────────────────────
 ALLOWED_EXTENSIONS = {".pdf"}
-ALLOWED_AUDIO_EXTENSIONS_SET = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
 MAX_FILE_SIZE_MB = 50
