@@ -6,7 +6,7 @@
 <br/>
 
 <!-- Logo -->
-<img src="PRIVEXA_LOGO.png" width="420" alt="Privexa Logo"/>
+<img width="2000" height="2000" alt="Image" src="https://github.com/user-attachments/assets/9029e0a6-f081-4c99-a7e7-0a8ddb81d197" />
 
 <br/><br/>
 
